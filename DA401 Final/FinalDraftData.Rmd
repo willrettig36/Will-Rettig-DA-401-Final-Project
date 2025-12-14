@@ -1,0 +1,952 @@
+---
+title: "Final Draft"
+output: html_document
+date: "`r Sys.Date()`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The following markdown file includes all of the data cleaning and implementation for the project. There are four total data sets, that are cleaned, merged, and compiled together to aid in the usage of one another. This first section includes the initial People dataset from Sean Lahman's baseball database, and the code deals further with the cleaning of the dataset. 
+
+## Data
+
+
+```{r}
+# These are the two necessary packages for uploading and adjustment
+
+library(dplyr)
+library(Lahman)
+
+# The data must be changed so that it can be altered.
+# Only players from 2015-2024 will be included, as the dataset does not include 2025 instances (12/12/2025).
+# This will discard players with an NA for Final Game, so that truly only 2015-2024 is included.
+# The mutate and select will create and select only the variables that will be utilized, to shrink the size of the dataset.
+Lahman_Player_Info <- People %>%
+  mutate(finalGame = as.Date(finalGame)) %>% 
+  filter(
+    birthYear >= 1970,                    
+    is.na(finalGame) | finalGame >= as.Date("2015-01-01")) %>% 
+  mutate(nameFull = paste(nameFirst, nameLast)) %>%    
+  select(nameFull, weight, height, bats, throws)
+
+```
+
+The first data set has been created. It includes the Lahman Player Information, which is the name, weight, height, bats, and throws variables. Now that the first data set has been uploaded for utilization, I can read in the Tommy John Surgery list.
+
+```{r}
+# This package is needed for uploading.
+library(readr)
+TJ_Surgery_List <- read_csv("TJ_Surgery_List.csv")
+```
+
+Because the data set is very large, it is necessary to cut down on some of the variables. This was just the first step in the process. The data has been successfully loaded into the markdown file. 
+
+```{r}
+# Similarly to the Lahman dataset, not all of the variables will be used, so it is important to reduce the size of the dataset.  
+# Keeping the name the same will remove the large dataset to avoid any confusion of what each dataset is. 
+
+TJ_Surgery_List <- TJ_Surgery_List %>%
+  select(
+    "Player",
+    "TJ Surgery Date",
+    "Team",
+    "Level",
+    "Position",
+    "Throws",
+    "Return Date (same level)",
+    "Recovery Time (months)"
+  )
+```
+
+The Tommy John Surgery List has been successfully uploaded. The variables of choice are the player name, the date of the surgery, the team the player is on at the time of the surgery, the level they were at when they had surgery, the position they were at the time of surgery, what arm they threw with at the time of surgery, their return date to the same level following surgery, and the recovery time in months it took them to come back from the surgery. In some cases, for players with more than one surgery, there are multiple instances of these individual variables. Because of thsi, the dataset must be changed so that each of the pitchers with multiple surgeries take up one row, instead of being duplicates. I also want to have it so I can merge these datasets together to make it easier on myself down the road. 
+
+```{r}
+# This change will account for pitchers with multiple surgeries.
+# I.E: Jacob deGrom will have 1 row, with all of his surgeries listed instead of Jacob deGrom existing as multiple rows.
+
+TJ_Surgery_List_Duplicates_Removed <- TJ_Surgery_List %>%
+  arrange(Player, `TJ Surgery Date`) %>%        
+  group_by(Player) %>%
+  mutate(Surgery_Number = row_number()) %>%
+  ungroup()
+
+# This package is necessary for the next step, which includes adding the new variables for the surgery number, a continuation and cleaning of the previous step. 
+library(tidyr)
+
+TJ_Surgery_Complete <- TJ_Surgery_List_Duplicates_Removed %>%
+  pivot_wider(
+    id_cols = Player,
+    names_from = Surgery_Number,
+    values_from = c(
+      `TJ Surgery Date`,
+      Team,
+      Level,
+      Position,
+      Throws,
+      `Return Date (same level)`,
+      `Recovery Time (months)`
+    ),
+    names_glue = "{.value}_Surgery{Surgery_Number}"
+  )
+```
+
+This was the most difficult processing step completed so far. Now, in the environment, 3 data sets were uploaded. It is easier to see the progression this way, however. The data set ending in List is the uncleaned data set. The data set ending in Removed includes the new variable for the number of surgeries each player has had. The data set ending in Complete is the finalized data set that has the new variables and data from each individual surgery. This data set is the one that will be merged with the Lahman data for analysis. 
+
+```{r}
+# This step involves combining the Lahman and TJ Surgery data sets together. 
+
+Merged_TJ_Lahman_Data <- Lahman_Player_Info %>%
+  left_join(TJ_Surgery_Complete, by = c("nameFull" = "Player"))
+
+Merged_TJ_Lahman_Data <- Merged_TJ_Lahman_Data %>%
+  mutate(
+    Num_Surgeries = rowSums(!is.na(select(., starts_with("TJ Surgery Date_Surgery"))))
+  ) %>%
+  relocate(Num_Surgeries, .after = throws)
+
+# The final step moves the number of surgeries as a new variable to after the variable that indicates the throwing arm.
+```
+
+The datasets for Lahman and for the TJ surgery list have now been merged together for analysis. This combines the TJ surgery data, if applicable, for players that have had a surgery. It does not change the data for players that have not had a surgery, and they are not excluded in this case. This is for ease of analysis, and so that individual metrics of surgery and Lahman variables can be analyzed together. 
+
+While this is helpful, the dataset is not full yet and there is still work to be done. There now must be a variable added, a binomial variable, for indication of at least one surgery, or no surgery at all. 
+
+```{r}
+# This will create a new variable that uses 0s and 1s to indicate whether a player has had surgery. 
+
+Merged_TJ_Lahman_Data <- Merged_TJ_Lahman_Data %>%
+  mutate(
+    hadSurgery = ifelse(Num_Surgeries > 0, 1, 0)
+  ) %>%
+  relocate(hadSurgery, .after = Num_Surgeries)
+```
+
+Now that this binomial variable has been added, the data set is one step closer to being complete and full. However, one crucial variable has not been created yet. This new step will add BMI, body mass index, which is a crucial part of the analysis. 
+
+```{r}
+# This will add a new variable with the calculations to create a BMI metric, crucial for further analysis.  
+
+Merged_TJ_Lahman_Data <- Merged_TJ_Lahman_Data %>%
+  mutate(
+    BMI = round((weight / (height^2)) * 703, 2)
+  ) %>%
+  relocate(BMI, .after = height)
+```
+
+Now the dataset is complete, for now. The data is not done, but this dataset is sufficient for the upcoming analysis. The next step involves adding in the NewtForce data, which was completed for the early and exploratory results. However, because this data was already implemented, it will come later on in the process. The most challenging step of data implementation will come now, with the data from Baseball Savant. The CSV file is very large, significantly larger than the other three datasets, and requires some cleaning for ease of analysis. 
+
+```{r}
+# This will upload the dataset. 
+Baseball_Savant_Metrics <- read.csv("PitchersFullBaseballSavant.csv")
+```
+
+Now the dataset is uploaded, but there is some cleaning that needs to be completed in order for analysis to be conducted. The next step is removing the playerID variable, which could cause some confusion with it lacking in the other data sets. There also needs to be matching names between the data set. In the Baseball Savant dataset, there are different accent marks with various names, including periods and dashes. These need to be removed, as they are not included in the other datasets in this form. 
+
+```{r}
+# The names must match between the datasets
+Baseball_Savant_Metrics <- Baseball_Savant_Metrics %>%
+  mutate(
+    last_name..first_name = gsub("^\\s+|\\s+$", "",
+                                 sub("(.*),\\s*(.*)", "\\2 \\1", last_name..first_name))
+  ) %>%
+  rename(Player_Name = last_name..first_name)
+
+# The individual ID is not needed if the names match
+
+Baseball_Savant_Metrics <- Baseball_Savant_Metrics %>%
+  select(-player_id)
+```
+
+This was not too much of a hassle, though it was inconvinient. There was not as much cleaning as the other datasets. Now, the NewtForce data can be entered. There are more metrics included now, like throwing hand, height, weight, and max fastball velocity for the NewtForce data. 
+
+```{r}
+# This will import the data for NewtForce including all of the metrics and clean up the name formatting
+nf_weights_data <- read.csv("merged_data.csv")
+nf_weights_data <- nf_weights_data %>%
+  mutate(FullName = paste(First.Name, Last.Name)) %>%
+  select(-First.Name, -Last.Name) %>%
+  relocate(FullName, .before = Date)
+
+```
+
+Now that I have it a bit cleaner, I realize that the names are messed up. The naming procedure was not consistent, so there need to be some more changes here. 
+
+```{r}
+# This will remove the characters 'Rehab' at the end of two names
+nf_weights_data <- nf_weights_data %>%
+  mutate(
+    FullName = FullName %>%
+      gsub("Rehab$", "", .) %>%     # remove "Rehab" at end
+      gsub(" Rehab$", "", .) %>%    # remove " Rehab" at end
+      trimws()                      # remove trailing spaces left behind
+  )
+
+```
+
+There needs to be some alternate variables added now that the names are cleaned. The average needs to be taken by session in order for the time series to be sufficient and workable. 
+
+```{r}
+# Each session must have the average value from each variable for time series to be run
+
+Averaged_Player_Date <- nf_weights_data %>%
+  filter(FullName %in% c(
+    "Ben Hanley",
+    "Jaden Bakhit",
+    "Beau Chaney",
+    "Drew Oerther",
+    "Luke Pappano",
+    "Boyd Westerfield",
+    "Jake Gaerke",
+    "Rhys Canan",
+    "Tucker Wilburn"
+  )) %>%
+  group_by(FullName, Date) %>%
+  summarise(
+    across(
+      c(
+        `Accel.Impulse..lb.s.`,
+        `Accel.Impulse.Score..sec.`,
+        `Clawback..sec.`,
+        `Player.Velo..mph.`,
+        `Stride.Ratio....`,
+        `Y.Back.Score..lb.lb.`,
+        `Y.Front.Score..lb.lb.`,
+        `YZ.Back.Score..lb.lb.`,
+        `YZ.Front.Score..lb.lb.`,
+        `Z.Transfer..sec.`
+      ),
+      ~ mean(.x, na.rm = TRUE)
+    ),
+    .groups = "drop"
+  )
+```
+
+This involves one final check to make sure that all of the cleaning worked for the different data sets. One was needed to be fully created, and the other one was made specifically for download. 
+
+```{r}
+# This will upload the original data set that was downloadable with no changes
+
+NewtForce_Players_Original <- read.csv("NewtForce_Players_Info.csv")
+NewtForce_Players_Original <- NewtForce_Players_Original %>%
+  mutate(
+    player_name = case_when(
+      player_name == "Jaden Bahkit" ~ "Jaden Bakhit",
+      player_name == "Rhys Cannon"  ~ "Rhys Canan",
+      TRUE ~ player_name
+    )
+  )
+```
+
+The two data sets now should be in a state where they can be merged successfully together by name. 
+
+```{r}
+# This will merge the two NewtForce data sets together
+Merged_NewtForce <- Averaged_Player_Date %>%
+  left_join(NewtForce_Players_Original,
+            by = c("FullName" = "player_name"))
+
+Merged_NewtForce <- Merged_NewtForce %>%
+  mutate(Date = as.Date(Date, format = "%m/%d/%Y")) %>%
+  arrange(FullName, Date)
+```
+
+There is now a need to include a data set that only the players that have had Tommy John have their own data set. 
+
+```{r}
+Merged_Data_Surgery_Yes_Pitchers <- Merged_TJ_Lahman_Data %>%
+  filter(
+    hadSurgery == 1,
+    Position_Surgery1 == "P"
+  )
+```
+
+
+There is another merge that must be completed. The Surgery data is able to be lined up wuth the Baseball Savant metrics, by the overlap of names. 
+
+```{r}
+Pitcher_Surgery_Info <- Merged_TJ_Lahman_Data %>%
+  select(nameFull, BMI, throws, Num_Surgeries, hadSurgery)
+
+Baseball_Savant_BMI_Included <- Baseball_Savant_Metrics %>%
+  left_join(
+    Pitcher_Surgery_Info,
+    by = c("Player_Name" = "nameFull")
+  )
+```
+
+A snag was found in this function, as the accents and periods need to be removed as they were not done so successfully earlier. This will remove them from all of the data sets, not just one so that the data sets can be successfully merged together.
+
+```{r}
+# This is a longer code chunk, but a necessary one.
+# The first chunk will remove the accents, periods, and white space.
+
+library(stringi)
+
+Baseball_Savant_Metrics <- Baseball_Savant_Metrics %>%
+  mutate(
+    Player_Name_clean = Player_Name %>%
+      stri_trans_general("Latin-ASCII") %>%   
+      gsub("\\.", "", .) %>%                  
+      trimws()                                
+  )
+
+Merged_TJ_Lahman_Data <- Merged_TJ_Lahman_Data %>%
+  mutate(
+    nameFull_clean = nameFull %>%
+      stri_trans_general("Latin-ASCII") %>%   
+      gsub("\\.", "", .) %>%                  
+      trimws()
+  )
+
+# This will change the names and remove NAs, and players from 2025, since all of our data aligns with 2015-2024. 
+
+Pitcher_Surgery_Info <- Merged_TJ_Lahman_Data %>%
+  select(nameFull_clean, BMI, throws, Num_Surgeries, hadSurgery)
+
+
+Baseball_Savant_BMI_Included <- Baseball_Savant_Metrics %>%
+  left_join(
+    Pitcher_Surgery_Info,
+    by = c("Player_Name_clean" = "nameFull_clean")
+  )
+
+Baseball_Savant_BMI_Included <- Baseball_Savant_BMI_Included %>%
+  filter(!is.na(BMI))
+
+Baseball_Savant_BMI_Included <- Baseball_Savant_BMI_Included %>%
+  filter(year != 2025)
+
+table(is.na(Baseball_Savant_BMI_Included$BMI))
+```
+
+
+## Visuals and Results
+
+This section will include all of the visuals and all of the results for the data analysis. The first section will begin with three scatterplots to compare what is able to be from the micro and the macro data. The first set of visuals will be three scatterplots that compare the relationship of BMI and top fastball velocity for three groups, the micro (high school pitchers), and the macro (pitchers that have had surgery and a different group of pitchers that have not had surgery). The results will not necessary be generalizable, they are more to exemplify trends, aimed at comparing the groups for future analysis and interpretation.
+
+```{r}
+# These are the packages needed for the following visualizations.
+library(dplyr)
+library(ggplot2)
+
+# Correlation: BMI and Velo.
+# This creates the correlation test for BMI and Fastball Velocity.
+nf_cor <- cor.test(
+  NewtForce_Players_Original$BMI,
+  NewtForce_Players_Original$top_fb_velocity,
+  method = "pearson"
+)
+
+print(nf_cor)
+```
+
+Now the correlation test has been completed. It is possible that there is no association as 0 is included in the confidence interval. The p-value is high, likely to small N of the data set. The correlation is moderately strong, but a greater N would be needed. Now, a linear model will be created showing the relationship of BMI at predicting fastball velocity.
+
+```{r}
+# Linear model
+# This will now create a simple model that will aim to predict the impact of BMI on predicting fastball velocity for the NewtForce data
+
+nf_model <- lm(top_fb_velocity ~ BMI, data = NewtForce_Players_Original)
+summary(nf_model)
+```
+
+Now the linear model has been completed. The p-value is high, again likely due to small N. R-squared is low, indicating that BMI can capture 12% of the variance in the model, or fastball velocity. The same tests must be completed for the Baseball Savant data now. 
+
+```{r}
+# Some cleaning of the fastball variable to find the max fastball speed, adjusted for the different types of fastballs
+Savant_LatestYear <- Baseball_Savant_BMI_Included %>%
+  filter(!is.na(BMI), !is.na(fastball_avg_speed)) %>%          
+  group_by(Player_Name) %>%
+  filter(year == max(year, na.rm = TRUE)) %>%                  
+  summarise(
+    BMI = first(BMI),                                          
+    fb_velocity = max(fastball_avg_speed, na.rm = TRUE),       
+    hadSurgery = first(hadSurgery),                            
+    .groups = "drop"
+  ) %>%
+  filter(is.finite(fb_velocity))                               
+
+# Correlation
+bs_cor <- cor.test(
+  Savant_LatestYear$BMI,
+  Savant_LatestYear$fb_velocity,
+  method = "pearson"
+)
+
+print(bs_cor)
+```
+The correlation is very low, but there is some difference with a statistically significant p-value. The linear model must now be created for Baseball Savant data.
+
+```{r}
+# Linear model
+bs_model <- lm(fb_velocity ~ BMI, data = Savant_LatestYear)
+summary(bs_model)
+```
+
+The model does not seem to have BMI as a large predictor. It accounts for less than 1% of the variance in top fastball velocity. This could be due to the larger data set. It is statistically significant. It is now time to create the scatterplots.
+
+```{r}
+# This sets the ranges for the scatterplots in range of fastball velocity and BMI
+global_x_range <- range(
+  NewtForce_Players_Original$BMI,
+  Savant_LatestYear$BMI,
+  na.rm = TRUE
+)
+
+global_y_range <- range(
+  NewtForce_Players_Original$top_fb_velocity,
+  Savant_LatestYear$fb_velocity,
+  na.rm = TRUE
+)
+
+# It is now important to separate the two groups: pitchers who have had and who haven't had surgery
+
+Savant_LatestYear_surg1 <- Savant_LatestYear %>%
+  filter(hadSurgery == 1)
+
+Savant_LatestYear_surg0 <- Savant_LatestYear %>%
+  filter(hadSurgery == 0)
+
+# This will create the scatterplot for the NewtForce Data
+
+nf_plot <- ggplot(NewtForce_Players_Original, aes(x = BMI, y = top_fb_velocity)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = TRUE) +
+  coord_cartesian(xlim = global_x_range, ylim = global_y_range) +
+  labs(
+    title = "BMI vs Top Fastball Velocity (NewtForce - All Pitchers)",
+    x = "BMI",
+    y = "Top Fastball Velocity (mph)"
+  ) +
+  theme_minimal()
+
+# This will create the scatterplot for the Baseball Savant Pitchers who have had surgery
+
+bs_plot_surg1 <- ggplot(Savant_LatestYear_surg1, aes(x = BMI, y = fb_velocity)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = TRUE) +
+  coord_cartesian(xlim = global_x_range, ylim = global_y_range) +
+  labs(
+    title = "BMI vs Top Fastball Velocity (Savant - Had Surgery)",
+    x = "BMI",
+    y = "Fastball Velocity (mph)"
+  ) +
+  theme_minimal()
+
+# This will create the scatterplot for the Baseball Savant Pitchers who have not had surgery
+
+bs_plot_surg0 <- ggplot(Savant_LatestYear_surg0, aes(x = BMI, y = fb_velocity)) +
+  geom_point(size = 3) +
+  geom_smooth(method = "lm", se = TRUE) +
+  coord_cartesian(xlim = global_x_range, ylim = global_y_range) +
+  labs(
+    title = "BMI vs Top Fastball Velocity (Savant - No Surgery)",
+    x = "BMI",
+    y = "Fastball Velocity (mph)"
+  ) +
+  theme_minimal()
+
+# This will print the visuals to the output
+nf_plot
+bs_plot_surg1
+bs_plot_surg0
+
+```
+
+The scatterplots have now been completed. The groups now can be compared statistically. The NewtForce element will be disregarded as it does not have a large enough N as compared to the Baseball Savant data sets. 
+
+```{r}
+# This captures the relationship between BMI and FB velocity for pitchers who have had a surgery
+Savant_group_surg1 <- Savant_LatestYear_surg1 %>%
+  transmute(
+    group = "Savant_Surgery",
+    BMI,
+    velo = fb_velocity
+  )
+
+# This captures the relationship between BMI and FB velocity for pitchers who have not had a surgery
+Savant_group_surg0 <- Savant_LatestYear_surg0 %>%
+  transmute(
+    group = "Savant_NoSurgery",
+    BMI,
+    velo = fb_velocity
+  )
+
+# This is an interaction terms that compares the groups within one another to see potential external relationships between the variables
+Combined_groups <- bind_rows(Savant_group_surg1, Savant_group_surg0)
+
+# This will output the interaction model
+interaction_model <- lm(velo ~ BMI * group, data = Combined_groups)
+summary(interaction_model)
+
+# It is important to create a table for readability in the final report
+interaction_summary <- summary(interaction_model)
+
+interaction_results <- as.data.frame(interaction_summary$coefficients)
+interaction_results <- tibble::rownames_to_column(interaction_results, var = "term")
+
+# This will rename columns
+interaction_results <- interaction_results %>%
+  dplyr::rename(
+    estimate   = Estimate,
+    std_error  = `Std. Error`,
+    t_value    = `t value`,
+    p_value    = `Pr(>|t|)`
+  )
+
+# This will round values to make the table results cleaner
+interaction_results <- interaction_results %>%
+  dplyr::mutate(
+    dplyr::across(c(estimate, std_error, t_value, p_value), ~ round(.x, 3))
+  )
+
+# Shows as a simple table
+interaction_results
+
+# Creates a cleaner table
+library(gt)
+
+interaction_results_table <- interaction_results %>%
+  gt() %>%
+  tab_header(
+    title = "Interaction Model Results: BMI, Velocity, and Surgery Group"
+  )
+
+# Shows as the clean table
+interaction_results_table
+
+```
+
+The interactions model has now been completed. The next steps involves an expanded time series model from the early results. This will show comparisons for all nine athletes to exemplify trends. 
+
+```{r}
+# Working with the NewtForce data with a date that can be formatted on the x-axis.
+Merged_NewtForce <- Merged_NewtForce %>%
+  mutate(Date = as.Date(Date))
+
+# Select all players
+players_of_interest <- c(
+  "Ben Hanley",
+  "Jaden Bakhit",
+  "Beau Chaney",
+  "Drew Oerther",
+  "Luke Pappano",
+  "Boyd Westerfield",
+  "Jake Gaerke",
+  "Rhys Canan",
+  "Tucker Wilburn"
+)
+
+# Take the average of the peak ground force for each session and each player
+Accel_Time_Data <- Merged_NewtForce %>%
+  filter(FullName %in% players_of_interest) %>%
+  group_by(FullName, Date) %>%
+  summarise(
+    Accel_Impulse_lb_s = mean(`Accel.Impulse..lb.s.`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  mutate(
+    FullName = factor(FullName, levels = players_of_interest)
+  )
+
+# Create the plot to show the differences in average peak ground force for each session for each player
+accel_plot <- ggplot(Accel_Time_Data, aes(x = Date, y = Accel_Impulse_lb_s)) +
+  geom_line() +
+  geom_point(size = 2) +
+  facet_wrap(~ FullName, ncol = 2) + 
+  labs(
+    title = "Average Peak Force Across NewtForce Sessions",
+    x = "Session Date",
+    y = "Accel Impulse (lb·s)"
+  ) +
+  scale_x_date(date_labels = "%b %Y") +  
+  theme_bw(base_size = 14) +            
+  theme(
+    strip.text = element_text(face = "bold"),       
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.minor = element_blank(),
+    panel.spacing = unit(0.7, "lines")              
+  )
+
+# Show the plot
+accel_plot
+```
+The comparison time series plot has now been completed. The heat map was unsuccessful and unreadable from the early results. It must be cleaned up and will be using different variables from the early results. This will help with the creation of the LASSO model.
+
+```{r}
+# Load in the correct package
+library(tibble)
+
+# This selects the correct variables and the variables which will be most useful for the ultimate model
+corr_data <- Baseball_Savant_BMI_Included %>%
+  select(
+    hadSurgery,
+    Num_Surgeries,
+    p_formatted_ip,
+    n,
+    arm_angle,
+    fastball_avg_speed,
+    breaking_avg_speed,
+    offspeed_avg_speed
+  ) %>%
+  select(where(is.numeric))   
+
+# Put the data in a matrix
+corr_matrix <- cor(corr_data, use = "pairwise.complete.obs")
+
+# Create the data frame
+corr_df <- as.data.frame(corr_matrix) %>%
+  rownames_to_column(var = "Var1") %>%
+  pivot_longer(
+    cols = -Var1,
+    names_to = "Var2",
+    values_to = "Correlation"
+  )
+
+# Make the matrix and data frame into a heatmap that shows the differences with colors.
+heatmap_corr <- ggplot(corr_df, aes(x = Var2, y = Var1, fill = Correlation)) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = sprintf("%.2f", Correlation)), size = 3) +
+  scale_fill_gradient2(
+    low = "blue",
+    high = "red",
+    mid = "white",
+    midpoint = 0,
+    limits = c(-1, 1),
+    name = "r"
+  ) +
+  labs(
+    title = "Correlation Heatmap: Surgery, IP, Pitch Count, Arm Angle, and Pitch Velocities",
+    x = "",
+    y = ""
+  ) +
+  theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 10),
+    axis.text.y = element_text(size = 10),
+    panel.grid = element_blank(),
+    plot.title = element_text(size = 14, face = "bold", hjust = 0.5)
+  )
+# Show the heat map
+heatmap_corr
+
+```
+
+This next step involves completing the final model. A LASSO model and all of the other visualizations and data tables will be included in this process. This model will be created with the hope of being able to predict injury on a variety of predictors. The correlation heat map indicates this may be a strong relationship. 
+
+```{r}
+# Load in the necessary packages
+library(glmnet)
+library(caret)
+library(pROC)
+library(ggthemes)
+
+# Creates a data frame for the model to train on
+# There are numerous steps and creations of data frames for training and steps to enhance the model for its creation
+df <- Baseball_Savant_BMI_Included %>%
+  transmute(
+    hadSurgery = hadSurgery,
+    BMI = BMI,
+    n = n,
+    p_formatted_ip = as.numeric(p_formatted_ip),
+    arm_angle = arm_angle,
+    fastball_avg_speed = fastball_avg_speed,
+    breaking_avg_speed = breaking_avg_speed,
+    offspeed_avg_speed = offspeed_avg_speed
+  ) %>%
+  filter(!is.na(hadSurgery))
+
+for (col in names(df)) {
+  if (col != "hadSurgery") {
+    df[[col]][is.na(df[[col]])] <- median(df[[col]], na.rm = TRUE)
+  }
+}
+
+df$hadSurgery <- as.numeric(df$hadSurgery)
+
+set.seed(123)
+train_idx <- createDataPartition(df$hadSurgery, p = 0.8, list = FALSE)
+train_df <- df[train_idx, ]
+test_df  <- df[-train_idx, ]
+
+x_train <- model.matrix(hadSurgery ~ ., data = train_df)[, -1]
+y_train <- train_df$hadSurgery
+
+x_test <- model.matrix(hadSurgery ~ ., data = test_df)[, -1]
+y_test <- test_df$hadSurgery
+
+set.seed(123)
+cv_lasso <- cv.glmnet(
+  x_train, y_train,
+  family = "binomial",
+  alpha = 1,
+  nfolds = 10,
+  type.measure = "auc"
+)
+
+lambda_min <- cv_lasso$lambda.min
+
+lasso_model <- glmnet(
+  x_train, y_train,
+  family = "binomial",
+  alpha = 1,
+  lambda = lambda_min
+)
+
+coef_lasso <- as.matrix(coef(lasso_model))
+
+coef_df <- data.frame(
+  variable = rownames(coef_lasso),
+  coefficient = coef_lasso[, 1],
+  row.names = NULL
+) %>%
+  filter(variable != "(Intercept)") %>%
+  arrange(desc(abs(coefficient)))
+
+prob_test <- predict(lasso_model, newx = x_test, type = "response")[, 1]
+roc_obj <- roc(response = y_test, predictor = prob_test)
+auc_val <- as.numeric(auc(roc_obj))
+
+
+coef_df <- coef_df %>%
+  mutate(
+    coefficient = round(coefficient, 3),
+    AUC = round(auc_val, 3)
+  )
+
+coef_df  
+
+roc_plot <- ggplot(
+  data.frame(
+    fpr = rev(roc_obj$specificities),
+    tpr = rev(roc_obj$sensitivities)
+  ),
+  aes(x = 1 - fpr, y = tpr)
+) +
+  geom_line(size = 1.2, color = "steelblue") +
+  geom_abline(linetype = "dashed") +
+  labs(
+    title = paste0("ROC Curve - LASSO Logistic Regression (AUC = ", round(auc_val, 3), ")"),
+    x = "False Positive Rate",
+    y = "True Positive Rate"
+  ) +
+  theme_wsj(base_size = 14)
+
+# This plots the actual visualization showing the curve
+roc_plot
+ggsave("lasso_roc_curve.png", roc_plot, width = 6, height = 6, dpi = 300)
+
+coef_plot <- coef_df %>%
+  ggplot(aes(x = reorder(variable, coefficient), y = coefficient)) +
+  geom_bar(stat = "identity", fill = "firebrick", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "LASSO Coefficients\n(Predicting Tommy John Surgery)",
+    x = "",
+    y = "Coefficient (Standardized)"
+  ) +
+  theme_wsj(base_size = 14)
+
+# This shows the visual showing the coefficients and their comparisons statistically
+coef_plot
+ggsave("lasso_coefficients.png", coef_plot, width = 7, height = 5, dpi = 300)
+
+library(gt)
+
+# This adds a table for the results to be more readable
+final_table <- coef_df
+simple_table <- final_table %>%
+  select(variable, coefficient, AUC) %>%
+  mutate(
+    coefficient = round(coefficient, 3),
+    AUC = round(AUC, 3)
+  ) %>%
+  gt() %>%
+  tab_header(
+    title = "LASSO Coefficients and Model AUC"
+  ) %>%
+  fmt_number(columns = c(coefficient, AUC), decimals = 3) %>%
+  tab_options(
+    table.border.top.style = "solid",
+    table.border.bottom.style = "solid",
+    table_body.border.top.style = "solid",
+    table_body.border.bottom.style = "solid",
+    column_labels.border.bottom.style = "solid",
+    data_row.padding = px(4)
+  ) %>%
+  tab_style(
+    style = cell_borders(sides = "all", color = "black", weight = px(1)),
+    locations = cells_body()
+  ) %>%
+  tab_style(
+    style = cell_borders(sides = "all", color = "black", weight = px(1)),
+    locations = cells_column_labels()
+  )
+
+simple_table
+```
+
+```{r}
+# Load in the necessary packages
+library(glmnet)
+library(caret)
+library(pROC)
+library(ggthemes)
+library(ggplot2)
+
+# Creates a data frame for the model to train on
+# There are numerous steps and creations of data frames for training and steps to enhance the model for its creation
+df <- Baseball_Savant_BMI_Included %>%
+  transmute(
+    hadSurgery = hadSurgery,
+    BMI = BMI,
+    n = n,
+    p_formatted_ip = as.numeric(p_formatted_ip),
+    arm_angle = arm_angle,
+    fastball_avg_speed = fastball_avg_speed,
+    breaking_avg_speed = breaking_avg_speed,
+    offspeed_avg_speed = offspeed_avg_speed
+  ) %>%
+  filter(!is.na(hadSurgery))
+
+for (col in names(df)) {
+  if (col != "hadSurgery") {
+    df[[col]][is.na(df[[col]])] <- median(df[[col]], na.rm = TRUE)
+  }
+}
+
+df$hadSurgery <- as.numeric(df$hadSurgery)
+
+set.seed(123)
+train_idx <- createDataPartition(df$hadSurgery, p = 0.8, list = FALSE)
+train_df <- df[train_idx, ]
+test_df  <- df[-train_idx, ]
+
+x_train <- model.matrix(hadSurgery ~ ., data = train_df)[, -1]
+y_train <- train_df$hadSurgery
+
+x_test <- model.matrix(hadSurgery ~ ., data = test_df)[, -1]
+y_test <- test_df$hadSurgery
+
+set.seed(123)
+cv_lasso <- cv.glmnet(
+  x_train, y_train,
+  family = "binomial",
+  alpha = 1,
+  nfolds = 10,
+  type.measure = "auc"
+)
+
+lambda_min <- cv_lasso$lambda.min
+
+lasso_model <- glmnet(
+  x_train, y_train,
+  family = "binomial",
+  alpha = 1,
+  lambda = lambda_min
+)
+
+coef_lasso <- as.matrix(coef(lasso_model))
+
+coef_df <- data.frame(
+  variable = rownames(coef_lasso),
+  coefficient = coef_lasso[, 1],
+  row.names = NULL
+) %>%
+  filter(variable != "(Intercept)") %>%
+  arrange(desc(abs(coefficient)))
+
+prob_test <- predict(lasso_model, newx = x_test, type = "response")[, 1]
+roc_obj <- roc(response = y_test, predictor = prob_test)
+auc_val <- as.numeric(auc(roc_obj))
+
+coef_df <- coef_df %>%
+  mutate(
+    coefficient = round(coefficient, 3),
+    AUC = round(auc_val, 3)
+  )
+
+coef_df  
+
+roc_plot <- ggplot(
+  data.frame(
+    fpr = rev(roc_obj$specificities),
+    tpr = rev(roc_obj$sensitivities)
+  ),
+  aes(x = 1 - fpr, y = tpr)
+) +
+  geom_line(size = 1.2, color = "steelblue") +
+  geom_abline(linetype = "dashed") +
+  labs(
+    title = paste0("ROC Curve - LASSO Logistic Regression (AUC = ", round(auc_val, 3), ")"),
+    x = "False Positive Rate",
+    y = "True Positive Rate"
+  ) +
+  theme_wsj(base_size = 14) +
+  theme(
+    axis.title.x = element_text(),
+    axis.title.y = element_text()
+  )
+
+# This plots the actual visualization showing the curve
+roc_plot
+ggsave("lasso_roc_curve.png", roc_plot, width = 6, height = 6, dpi = 300)
+
+coef_plot <- coef_df %>%
+  ggplot(aes(x = reorder(variable, coefficient), y = coefficient)) +
+  geom_bar(stat = "identity", fill = "firebrick", alpha = 0.8) +
+  coord_flip() +
+  labs(
+    title = "LASSO Coefficients\n(Predicting Tommy John Surgery)",
+    x = "Predictor Variable",
+    y = "Coefficient (Standardized)"
+  ) +
+  theme_wsj(base_size = 14) +
+  theme(
+    axis.title.x = element_text(),
+    axis.title.y = element_text()
+  )
+
+# This shows the visual showing the coefficients and their comparisons statistically
+coef_plot
+ggsave("lasso_coefficients.png", coef_plot, width = 7, height = 5, dpi = 300)
+
+library(gt)
+
+# This adds a table for the results to be more readable
+final_table <- coef_df
+simple_table <- final_table %>%
+  select(variable, coefficient, AUC) %>%
+  mutate(
+    coefficient = round(coefficient, 3),
+    AUC = round(AUC, 3)
+  ) %>%
+  gt() %>%
+  tab_header(
+    title = "LASSO Coefficients and Model AUC"
+  ) %>%
+  fmt_number(columns = c(coefficient, AUC), decimals = 3) %>%
+  tab_options(
+    table.border.top.style = "solid",
+    table.border.bottom.style = "solid",
+    table_body.border.top.style = "solid",
+    table_body.border.bottom.style = "solid",
+    column_labels.border.bottom.style = "solid",
+    data_row.padding = px(4)
+  ) %>%
+  tab_style(
+    style = cell_borders(sides = "all", color = "black", weight = px(1)),
+    locations = cells_body()
+  ) %>%
+  tab_style(
+    style = cell_borders(sides = "all", color = "black", weight = px(1)),
+    locations = cells_column_labels()
+  )
+
+simple_table
+
+```
+
+This is the complete markdown file and documentation for the entirety of the project results, visuals, and data.
